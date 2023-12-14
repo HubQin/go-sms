@@ -1,14 +1,9 @@
 package aliyun
 
 import (
-	"context"
-	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base64"
 	"errors"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/dysmsapi"
 	"github.com/pkg6/go-sms"
-	"net/url"
-	"strings"
 	"time"
 )
 
@@ -48,7 +43,7 @@ func (g *ALiYun) AsName() string {
 	return "aliyun"
 }
 
-//请求参数生成
+// 请求参数生成
 func (g *ALiYun) query() gosms.MapStrings {
 	if g.RegionId == "" {
 		g.RegionId = "cn-hangzhou"
@@ -70,40 +65,30 @@ func (g *ALiYun) query() gosms.MapStrings {
 	return maps
 }
 
-func (g *ALiYun) generateSign(query gosms.MapStrings) string {
-	s := strings.Replace(query.ToUrlQuery(true), "+", "%20", -1)
-	stringToSign := "GET&" + url.QueryEscape("/") + "&" + s
-	mac := hmac.New(sha1.New, []byte(g.AccessKeySecret+"&"))
-	mac.Write([]byte(stringToSign))
-	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	return url.QueryEscape(signature)
-}
-
 func (g *ALiYun) Send(to gosms.IPhoneNumber, message gosms.IMessage) (gosms.SMSResult, error) {
 	g.Lock.L.Lock()
 	defer g.L.Unlock()
-	var resp Response
 	data := message.GetData(g.I())
-	signName := data.GetDefault("signName", message.GetSignName(g.I()))
-	template := message.GetTemplate(g.I())
 	data.Delete("signName")
-	query := g.query()
-	mobile := gosms.GetPhoneNumber(to)
-	query["PhoneNumbers"] = mobile
-	query["SignName"] = signName
-	query["TemplateCode"] = template
-	jsonStr, _ := data.ToJson()
-	query["TemplateParam"] = jsonStr
-	query["Signature"] = g.generateSign(query)
-	response, err := gosms.Client.Get(context.Background(), g.Host, query)
-	defer response.Close()
-	err = response.Unmarshal(&resp)
-	result := gosms.BuildSMSResult(to, message, g, resp)
-	if err != nil {
-		return result, err
+
+	client, err := dysmsapi.NewClientWithAccessKey(g.RegionId, g.AccessKeyId, g.AccessKeySecret)
+
+	request := dysmsapi.CreateSendSmsRequest()                                 //创建请求
+	request.Scheme = "https"                                                   //请求协议
+	request.PhoneNumbers = gosms.GetPhoneNumber(to)                            //接收短信的手机号码
+	request.SignName = data.GetDefault("signName", message.GetSignName(g.I())) //短信签名名称
+	request.TemplateCode = message.GetTemplate(g.I())                          //短信模板ID
+	par, _ := data.ToJson()
+	request.TemplateParam = par //将短信模板参数传入短信模板
+
+	response, err := client.SendSms(request) //调用阿里云API发送信息
+	if err != nil {                          //处理错误
+		return gosms.SMSResult{}, err
+	} else {
+		if response.Code != "OK" {
+			return gosms.SMSResult{}, errors.New(response.Message)
+		} else {
+			return gosms.SMSResult{}, nil
+		}
 	}
-	if resp.Code != "ok" {
-		return result, errors.New(resp.Message)
-	}
-	return result, err
 }
